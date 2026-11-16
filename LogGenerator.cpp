@@ -17,40 +17,60 @@ LogGenerator::LogGenerator(std::string fileName)
         return;
     }
 
+    // worker thread
+    workerThread = std::thread(&LogGenerator::writeLog,this);
+
 }
 
 LogGenerator::~LogGenerator() {
     if (_fd != -1) {
         close(_fd);
     }
+    workerThread.join();
 }
 
-void LogGenerator::writeLog(size_t numberOfBlocks) {
 
-    size_t blocksWritten = 0;
 
-    while (blocksWritten < numberOfBlocks){
-        Block randomBlock = Block();
+void LogGenerator::writeLog() {
 
-        size_t totalBytesWritten = 0;
-        
-        while (totalBytesWritten < randomBlock._blockSize) {
+    auto& queue = LogGenerator::boundedQueue;
+    
+    while (queue.size() != 0){
+        Block block = queue.front();
+        queue.pop();
+        size_t bytesWrittenThisBlock = 0;
+
+        while (bytesWrittenThisBlock < block._blockSize) {
             
-            long int bytesRemaining = randomBlock._blockSize - totalBytesWritten;
-
-            ssize_t bytesWritten = write(_fd, randomBlock._block.c_str() + totalBytesWritten, bytesRemaining);
+            long int bytesRemaining = block._blockSize - bytesWrittenThisBlock;
+            
+            // Write into Disk with O_SYNC .. 
+            ssize_t bytesWritten = write(_fd, block._block.c_str() + bytesWrittenThisBlock, bytesRemaining);
             
             if (bytesWritten == -1) {  
                 std::cout << "Failed to Write" << std::endl;
                 break; // Exit loop on a fatal write error
             }
             
-            totalBytesWritten += bytesWritten;
+            bytesWrittenThisBlock += bytesWritten;
         } 
-        blocksWritten += 1;
-        LOG_INFO("Block Written: " + std::to_string(blocksWritten));
+        LOG_INFO("Block Written successfully...");
     }
+    return;
+}
 
-    std::cout << "Finished! Successfully writing all Blocks";
+/// @brief sends the block to boundedQueue;
+void LogGenerator::blockPublisher()
+{
+    std::lock_guard<std::mutex> lock(queueMutex);
+    auto& queue = LogGenerator::boundedQueue;
+    if (queue.size() < LogGenerator::maxBoundedQueueCapacity){
+        queue.push(Block());
+        // notify the worker to wake up and start processing. 
+        cv.notify_one();
+    }
+    else{
+        std::cout << "Queue limit reached. Please Wait" << std::endl;
+    }
     return;
 }
