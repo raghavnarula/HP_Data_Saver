@@ -23,13 +23,21 @@ LogGenerator::LogGenerator(std::string fileName)
 }
 
 LogGenerator::~LogGenerator() {
+    {
+        std::lock_guard<std::mutex> lock(queueMutex);
+        stopping = true;
+    }
+
+    cv.notify_one();
+
+    if (workerThread.joinable()) {
+        workerThread.join();
+    }
+
     if (_fd != -1) {
         close(_fd);
     }
-    workerThread.join();
 }
-
-
 
 void LogGenerator::writeLog() {
     auto& queue = boundedQueue;
