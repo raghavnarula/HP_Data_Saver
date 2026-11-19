@@ -31,5 +31,5 @@ class LogGenerator{
         std::thread workerThread;
         std::mutex queueMutex;
         std::condition_variable cv;
-        
+        bool stopping = false;
 };

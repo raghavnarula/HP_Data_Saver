@@ -32,31 +32,63 @@ LogGenerator::~LogGenerator() {
 
 
 void LogGenerator::writeLog() {
+    auto& queue = boundedQueue;
 
-    auto& queue = LogGenerator::boundedQueue;
-    
-    while (queue.size() != 0){
-        Block block = queue.front();
+    while (true) {
+        std::unique_lock<std::mutex> lock(queueMutex);
+
+        // Sleep until logs arrive or shutdown is requested
+        cv.wait(lock, [this]() {
+            return !boundedQueue.empty() || stopping;
+        });
+
+        // Exit only when shutting down and all logs are processed
+        if (stopping && queue.empty()) {
+            break;
+        }
+
+        // Safely retrieve a block
+        Block block = std::move(queue.front());
         queue.pop();
+
+        // Release mutex before slow disk I/O
+        lock.unlock();
+
         size_t bytesWrittenThisBlock = 0;
+        bool success = true;
 
         while (bytesWrittenThisBlock < block._blockSize) {
-            
-            long int bytesRemaining = block._blockSize - bytesWrittenThisBlock;
-            
-            // Write into Disk with O_SYNC .. 
-            ssize_t bytesWritten = write(_fd, block._block.c_str() + bytesWrittenThisBlock, bytesRemaining);
-            
-            if (bytesWritten == -1) {  
+            size_t bytesRemaining =
+                block._blockSize - bytesWrittenThisBlock;
+
+            ssize_t bytesWritten = write(
+                _fd,
+                block._block.c_str() + bytesWrittenThisBlock,
+                bytesRemaining
+            );
+
+            if (bytesWritten == -1) {
+                if (errno == EINTR) {
+                    continue;
+                }
+
                 std::cout << "Failed to Write" << std::endl;
-                break; // Exit loop on a fatal write error
+                success = false;
+                break;
             }
-            
+
+            if (bytesWritten == 0) {
+                success = false;
+                break;
+            }
+
             bytesWrittenThisBlock += bytesWritten;
-        } 
-        LOG_INFO("Block Written successfully...");
+        }
+
+        if (success) {
+            LOG_INFO("Block Written successfully...");
+        }
     }
-    return;
 }
 
 /// @brief sends the block to boundedQueue;
